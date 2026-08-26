@@ -1,0 +1,17 @@
+services:
+  parser:
+    build: ./backend
+    restart: unless-stopped
+    shm_size: 1gb
+    environment:
+      CORS_ORIGINS: http://localhost:18473
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    restart: unless-stopped
+    depends_on: [parser]
+    environment:
+      PARSER_API_URL: http://parser:8000
+      PORT: "18473"
+    ports: ["18473:18473"]
