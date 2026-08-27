@@ -5,7 +5,6 @@ from pydantic import BaseModel, Field, HttpUrl
 
 class ParseRequest(BaseModel):
     url: HttpUrl
-    max_organizations: int = Field(default=100, ge=1, le=300)
 
 
 class Organization(BaseModel):
