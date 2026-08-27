@@ -1,6 +1,12 @@
 import unittest
 
-from app.extract import address_matches, organization_from_node, organizations_from_payloads
+from app.extract import (
+    address_matches,
+    organization_from_dom,
+    organization_from_node,
+    organizations_from_payloads,
+)
+
 
 class ExtractTests(unittest.TestCase):
     def test_extracts_current_yandex_business_shape(self):
@@ -27,57 +33,55 @@ class ExtractTests(unittest.TestCase):
         self.assertFalse(address_matches(None, "Москва, Тверская улица, 1"))
 
     def test_trusted_house_section_accepts_business_without_address(self):
-        self.assertTrue(
-            address_matches(
-                None,
-                "Москва, Тверская улица, 1",
-                allow_missing_candidate=True,
-            )
-        )
+        self.assertTrue(address_matches(None, "Москва, Тверская улица, 1", allow_missing_candidate=True))
 
     def test_payload_rejects_nearby_and_addressless_businesses(self):
         payload = {
             "items": [
-                {
-                    "type": "business",
-                    "id": "1",
-                    "title": "В доме",
-                    "address": "Москва, Тверская улица, 1",
-                },
-                {
-                    "type": "business",
-                    "id": "2",
-                    "title": "Рядом",
-                    "address": "Москва, Тверская улица, 10",
-                },
+                {"type": "business", "id": "1", "title": "В доме", "address": "Москва, Тверская улица, 1"},
+                {"type": "business", "id": "2", "title": "Рядом", "address": "Москва, Тверская улица, 10"},
                 {"type": "business", "id": "3", "title": "Метка на карте"},
             ]
         }
-
         result = organizations_from_payloads([payload], "Москва, Тверская улица, 1")
-
         self.assertEqual([organization.id for organization in result], ["1"])
 
     def test_house_section_keeps_addressless_but_rejects_other_address(self):
         payload = {
             "items": [
                 {"type": "business", "id": "1", "title": "Ozon"},
-                {
-                    "type": "business",
-                    "id": "2",
-                    "title": "Рядом",
-                    "address": "Москва, Тверская улица, 10",
-                },
+                {"type": "business", "id": "2", "title": "Рядом", "address": "Москва, Тверская улица, 10"},
             ]
         }
-
         result = organizations_from_payloads(
             [payload],
             "Москва, Тверская улица, 1",
             allow_missing_address=True,
         )
-
         self.assertEqual([organization.id for organization in result], ["1"])
+
+    def test_gallery_link_is_not_an_organization(self):
+        result = organization_from_dom(
+            "Фото",
+            "/maps/org/ozon/11633193053/gallery/",
+            "Фото",
+        )
+        self.assertIsNone(result)
+
+    def test_canonical_org_link_uses_explicit_card_fields(self):
+        result = organization_from_dom(
+            "Ozon",
+            "/maps/org/ozon/11633193053/",
+            "Ozon\nОткрыто до 22:00\nПункт выдачи",
+            category="Пункт выдачи",
+            address="Шебашёвский пр., 7",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.id, "11633193053")
+        self.assertEqual(result.name, "Ozon")
+        self.assertEqual(result.category, "Пункт выдачи")
+        self.assertEqual(result.address, "Шебашёвский пр., 7")
 
 
 if __name__ == "__main__":
