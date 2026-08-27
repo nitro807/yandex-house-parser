@@ -20,7 +20,7 @@ async def lifespan(_: FastAPI):
 
 
 app = FastAPI(title="Организации в доме", version="0.1.0", lifespan=lifespan)
-origins = [value.strip() for value in os.getenv("CORS_ORIGINS", "http://localhost:18473").split(",") if value.strip()]
+origins = [value.strip() for value in os.getenv("CORS_ORIGINS", "http://localhost:3000").split(",") if value.strip()]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -37,9 +37,8 @@ async def health() -> dict[str, str]:
 @app.post("/api/parse", response_model=ParseResult)
 async def parse_house(request: ParseRequest) -> ParseResult:
     try:
-        return await parser.parse(str(request.url), request.max_organizations)
+        return await parser.parse(str(request.url))
     except ParserError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except Exception as exc:
         raise HTTPException(status_code=500, detail="Не удалось обработать ссылку Яндекс Карт") from exc
-
