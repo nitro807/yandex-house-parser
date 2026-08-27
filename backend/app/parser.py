@@ -3,25 +3,18 @@ from __future__ import annotations
 import asyncio
 import json
 from contextlib import suppress
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
-from .extract import organization_from_dom, organizations_from_payloads, probable_house_address
+from .extract import address_matches, organization_from_dom, organizations_from_payloads, probable_house_address
 from .models import Organization, ParseResult
 
 
 ALLOWED_HOSTS = {
-    "yandex.ru",
-    "www.yandex.ru",
-    "yandex.com",
-    "www.yandex.com",
-    "yandex.kz",
-    "www.yandex.kz",
-    "yandex.by",
-    "www.yandex.by",
-    "yandex.com.tr",
-    "www.yandex.com.tr",
+    "yandex.ru", "www.yandex.ru", "yandex.com", "www.yandex.com",
+    "yandex.kz", "www.yandex.kz", "yandex.by", "www.yandex.by",
+    "yandex.com.tr", "www.yandex.com.tr",
 }
 
 
@@ -87,13 +80,20 @@ class YandexHouseParser:
 
         async def capture_response(response) -> None:
             try:
-                content_type = (await response.header_value("content-type") or "").casefold()
                 hostname = urlparse(response.url).hostname or ""
-                if "json" not in content_type or "yandex" not in hostname:
+                if "yandex" not in hostname:
+                    return
+                content_type = (await response.header_value("content-type") or "").casefold()
+                resource_type = response.request.resource_type
+                if "json" not in content_type and resource_type not in {"xhr", "fetch"}:
                     return
                 body = await response.body()
-                if len(body) <= 8_000_000:
-                    payloads.append(json.loads(body))
+                if len(body) > 8_000_000:
+                    return
+                text = body.decode("utf-8-sig").lstrip()
+                if text.startswith(")]}'"):
+                    text = text.split("\n", 1)[-1]
+                payloads.append(json.loads(text))
             except Exception:
                 return
 
@@ -109,32 +109,26 @@ class YandexHouseParser:
         if await self._captcha_visible(page):
             raise ParserError("Яндекс показал капчу. Повтори запрос позже или запусти сервис с обычного IP")
 
-        address_candidates = await self._address_candidates(page)
-        address = probable_house_address(address_candidates)
-
+        address = probable_house_address(await self._address_candidates(page))
         payload_count_before_section = len(payloads)
-        clicked = await self._open_organizations(page)
-        if not clicked:
-            warnings.append("Не удалось явно открыть раздел организаций; использованы данные карточки дома")
+        section_opened = await self._open_organizations(page)
+        if not section_opened:
+            warnings.append("Не удалось открыть раздел «Организации внутри»")
 
         await self._scroll_results(page, max_items)
-        await page.wait_for_timeout(800)
+        await page.wait_for_timeout(1_000)
         if await self._captcha_visible(page):
             raise ParserError("Во время сбора Яндекс показал капчу")
 
-        # Responses loaded before the click also contain businesses from the map
-        # viewport. Responses triggered by the organizations tab represent the
-        # building list and may legitimately omit an address (as Yandex does for
-        # compact cards such as pickup points).
-        section_payloads = payloads[payload_count_before_section:] if clicked else []
+        section_payloads = payloads[payload_count_before_section:] if section_opened else []
         organizations = organizations_from_payloads(
             section_payloads,
             address,
             allow_missing_address=True,
         )
-        if not organizations and not clicked:
+        if not organizations and not section_opened:
             organizations = organizations_from_payloads(payloads, address)
-        if not organizations:
+        if not organizations and section_opened:
             organizations = await self._organizations_from_dom(page, address)
             if organizations:
                 warnings.append("Организации извлечены из страницы; телефоны и сайты могут отсутствовать")
@@ -150,11 +144,14 @@ class YandexHouseParser:
 
         return ParseResult(
             source_url=source_url,
-            resolved_url=resolved_url,
+            resolved_url=page.url,
             address=address,
             organizations=organizations,
             warnings=warnings,
-            diagnostics={"captured_payloads": len(payloads), "organization_section_opened": clicked},
+            diagnostics={
+                "captured_payloads": len(payloads),
+                "organization_section_opened": section_opened,
+            },
         )
 
     @staticmethod
@@ -164,43 +161,36 @@ class YandexHouseParser:
     @staticmethod
     async def _address_candidates(page: Page) -> list[str]:
         selectors = [
-            "[itemprop='address']",
-            "[class*='card-title'] h1",
-            "[class*='card-title']",
-            "h1",
-            "[aria-label*='адрес' i]",
+            "[itemprop='address']", "[class*='card-title'] h1",
+            "[class*='card-title']", "h1", "[aria-label*='адрес' i]",
         ]
         values: list[str] = []
         for selector in selectors:
             with suppress(Exception):
-                texts = await page.locator(selector).all_inner_texts()
-                values.extend(texts[:10])
+                values.extend((await page.locator(selector).all_inner_texts())[:10])
         return values
 
     @staticmethod
     async def _open_organizations(page: Page) -> bool:
-        patterns = [
-            "Организации в здании",
-            "Организации в доме",
-            "Организации",
-            "В здании",
-        ]
-        for text in patterns:
-            for role in ("button", "link", "tab"):
-                locator = page.get_by_role(role, name=text, exact=False).first
-                with suppress(Exception):
-                    if await locator.is_visible(timeout=500):
-                        await locator.click(timeout=3_000)
-                        await page.wait_for_timeout(1_000)
-                        return True
-        return False
+        if "/inside/" in urlparse(page.url).path:
+            return True
+        locator = page.locator("a[href*='/inside/']").first
+        try:
+            href = await locator.get_attribute("href", timeout=3_000)
+            if not href:
+                return False
+            await page.goto(urljoin(page.url, href), wait_until="domcontentloaded", timeout=30_000)
+            await page.wait_for_timeout(1_000)
+            return "/inside/" in urlparse(page.url).path
+        except Exception:
+            return False
 
     @staticmethod
     async def _scroll_results(page: Page, max_items: int) -> None:
         previous = 0
         stable = 0
         for _ in range(min(40, max(8, max_items // 3))):
-            count = await page.locator("a[href*='/maps/org/'], a[href*='/org/']").count()
+            count = await page.locator("li a[href*='/org/']").count()
             stable = stable + 1 if count == previous else 0
             previous = count
             if count >= max_items or stable >= 3:
@@ -218,24 +208,25 @@ class YandexHouseParser:
 
     @staticmethod
     async def _organizations_from_dom(page: Page, house_address: str | None) -> list[Organization]:
-        # Map labels also link to businesses, so only inspect links inside result
-        # cards. A page-wide selector mixes nearby companies into the house list.
-        raw = await page.locator(
-            "li a[href*='/maps/org/'], li a[href*='/org/'], "
-            "article a[href*='/maps/org/'], article a[href*='/org/'], "
-            "[class*='search-snippet'] a[href*='/org/'], "
-            "[class*='business-snippet'] a[href*='/org/']"
-        ).evaluate_all(
+        raw = await page.locator("li a[href*='/org/']").evaluate_all(
             """(links) => links.map((link) => {
-              const card = link.closest('li, article, [class*=search-snippet], [class*=business-snippet]') || link.parentElement;
-              return {name: link.textContent || '', href: link.getAttribute('href') || '', text: card?.innerText || ''};
-            })"""
+              const href = link.getAttribute('href') || '';
+              const path = new URL(href, location.href).pathname;
+              if (!/^\\/maps\\/org\\/(?:[^/]+\\/)?\\d+\\/?$/.test(path)) return null;
+              const card = link.closest('li') || link.closest('article') || link.parentElement;
+              const category = card?.querySelector("a[href*='/category/']")?.textContent || '';
+              const address = card?.querySelector("a[href*='/house/']")?.textContent || '';
+              return {name: link.textContent || '', href, text: card?.innerText || '', category, address};
+            }).filter(Boolean)"""
         )
         result: list[Organization] = []
         seen: set[str] = set()
         for item in raw:
-            organization = organization_from_dom(item["name"], item["href"], item["text"])
-            if not organization or not YandexHouseParser._address_is_close(
+            organization = organization_from_dom(
+                item["name"], item["href"], item["text"],
+                category=item.get("category"), address=item.get("address"),
+            )
+            if not organization or not address_matches(
                 organization.address,
                 house_address,
                 allow_missing_candidate=True,
@@ -247,18 +238,3 @@ class YandexHouseParser:
             seen.add(key)
             result.append(organization)
         return result
-
-    @staticmethod
-    def _address_is_close(
-        candidate: str | None,
-        house: str | None,
-        *,
-        allow_missing_candidate: bool = False,
-    ) -> bool:
-        from .extract import address_matches
-
-        return address_matches(
-            candidate,
-            house,
-            allow_missing_candidate=allow_missing_candidate,
-        )
