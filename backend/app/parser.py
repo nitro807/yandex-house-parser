@@ -133,9 +133,7 @@ class YandexHouseParser:
                 warnings.append("Адрес дома не распознан; проверь результаты вручную")
 
         if address:
-            exact = [item for item in organizations if not item.address or self._address_is_close(item.address, address)]
-            if exact:
-                organizations = exact
+            organizations = [item for item in organizations if self._address_is_close(item.address, address)]
 
         organizations = organizations[:max_items]
         if not organizations:
@@ -211,7 +209,14 @@ class YandexHouseParser:
 
     @staticmethod
     async def _organizations_from_dom(page: Page, house_address: str | None) -> list[Organization]:
-        raw = await page.locator("a[href*='/maps/org/'], a[href*='/org/']").evaluate_all(
+        # Map labels also link to businesses, so only inspect links inside result
+        # cards. A page-wide selector mixes nearby companies into the house list.
+        raw = await page.locator(
+            "li a[href*='/maps/org/'], li a[href*='/org/'], "
+            "article a[href*='/maps/org/'], article a[href*='/org/'], "
+            "[class*='search-snippet'] a[href*='/org/'], "
+            "[class*='business-snippet'] a[href*='/org/']"
+        ).evaluate_all(
             """(links) => links.map((link) => {
               const card = link.closest('li, article, [class*=search-snippet], [class*=business-snippet]') || link.parentElement;
               return {name: link.textContent || '', href: link.getAttribute('href') || '', text: card?.innerText || ''};
@@ -221,7 +226,9 @@ class YandexHouseParser:
         seen: set[str] = set()
         for item in raw:
             organization = organization_from_dom(item["name"], item["href"], item["text"])
-            if not organization:
+            if not organization or not YandexHouseParser._address_is_close(
+                organization.address, house_address
+            ):
                 continue
             key = organization.id or organization.yandex_url or organization.name
             if key in seen:

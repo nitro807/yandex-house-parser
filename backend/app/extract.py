@@ -33,8 +33,10 @@ def normalize_address(value: str | None) -> str:
 def address_matches(candidate: str | None, house: str | None) -> bool:
     left = normalize_address(candidate)
     right = normalize_address(house)
-    if not left or not right:
+    if not right:
         return True
+    if not left:
+        return False
     left_numbers = re.findall(r"\b\d+[a-zа-я]?(?:[/кстр.-]\d+[a-zа-я]?)?\b", left)
     right_numbers = re.findall(r"\b\d+[a-zа-я]?(?:[/кстр.-]\d+[a-zа-я]?)?\b", right)
     if left_numbers and right_numbers and left_numbers[-1] != right_numbers[-1]:
