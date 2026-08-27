@@ -10,7 +10,7 @@
 docker compose up --build -d
 ```
 
-Откройте `http://localhost:18473`. Для остановки: `docker compose down`.
+Откройте `http://localhost:3000`. Для остановки: `docker compose down`.
 
 ## Разработка без Docker
 
@@ -35,8 +35,7 @@ PARSER_API_URL=http://localhost:8000 npm run dev
 
 ```json
 {
-  "url": "https://yandex.ru/maps/.../house/.../",
-  "max_organizations": 100
+  "url": "https://yandex.ru/maps/.../house/.../"
 }
 ```
 
@@ -46,6 +45,7 @@ PARSER_API_URL=http://localhost:8000 npm run dev
 
 - Разрешены только HTTPS-ссылки доменов Яндекса, чтобы входная ссылка не превратилась в SSRF.
 - Запросы выполняются последовательно: это уменьшает вероятность капчи.
+- Раздел «Организации внутри» обходится по всем страницам без ограничения количества компаний.
 - Короткие ссылки раскрываются браузером.
 - Результаты удаляются по ID и фильтруются по адресу дома.
 - Интерфейс сохраняет результат в CSV с UTF-8 BOM.
