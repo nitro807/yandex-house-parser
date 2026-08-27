@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from typing import Any, Iterable
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin, urlparse, urlunparse
 
 from .models import Organization
 
@@ -11,6 +11,15 @@ from .models import Organization
 SPACE_RE = re.compile(r"\s+")
 HOUSE_RE = re.compile(r"(?:^|[\s,])(?:д(?:ом)?\.?\s*)?(\d+[а-яa-z]?(?:[/кстр.-]\d+[а-яa-z]?)*)", re.I)
 ORG_PATH_RE = re.compile(r"/(?:maps/)?org/(?:[^/]+/)?(\d+)/?")
+
+
+def inside_url_for_house(url: str) -> str | None:
+    """Return the canonical `inside` URL only for a real Yandex house page."""
+    parsed = urlparse(url)
+    if "/house/" not in parsed.path:
+        return None
+    path = parsed.path.rstrip("/") + "/inside/"
+    return urlunparse(parsed._replace(path=path, fragment=""))
 
 
 def clean_text(value: Any) -> str | None:
@@ -104,22 +113,29 @@ def organization_from_node(node: dict[str, Any]) -> Organization | None:
     properties = node.get("properties") if isinstance(node.get("properties"), dict) else {}
     company = properties.get("CompanyMetaData") if isinstance(properties.get("CompanyMetaData"), dict) else None
     source = company or node
+
     node_type = str(node.get("type") or source.get("type") or "").casefold()
     has_business_shape = bool(company) or node_type == "business" or any(
         key in source for key in ("categories", "Categories", "phones", "Phones", "businessLinks", "ratingData")
     )
     if not has_business_shape:
         return None
+
     name = clean_text(source.get("title") or source.get("name") or properties.get("name"))
     if not name:
         return None
+
     company_id = clean_text(source.get("id") or source.get("oid"))
     address_obj = source.get("Address") if isinstance(source.get("Address"), dict) else {}
     address = clean_text(
-        source.get("fullAddress") or source.get("address") or address_obj.get("formatted") or properties.get("description")
+        source.get("fullAddress")
+        or source.get("address")
+        or address_obj.get("formatted")
+        or properties.get("description")
     )
     categories = _categories(source.get("categories") or source.get("Categories"))
     phones = _phone_values(source.get("phones") or source.get("Phones"))
+
     links = source.get("businessLinks") if isinstance(source.get("businessLinks"), list) else []
     website = clean_text(source.get("url") or source.get("website"))
     if not website:
@@ -128,15 +144,23 @@ def organization_from_node(node: dict[str, Any]) -> Organization | None:
                 website = clean_text(link.get("link") or link.get("url"))
                 if website:
                     break
+
     uri = clean_text(source.get("uri") or properties.get("uri"))
     yandex_url = clean_text(source.get("urlForYandexMaps") or source.get("yandexUrl"))
     if not yandex_url and company_id:
         yandex_url = f"https://yandex.ru/maps/org/{company_id}/"
     elif not yandex_url and uri and "oid=" in uri:
         yandex_url = f"https://yandex.ru/maps/org/{uri.rsplit('oid=', 1)[-1]}/"
+
     return Organization(
-        id=company_id, name=name, category=categories, address=address, phones=phones,
-        website=website, rating=_rating(source), yandex_url=yandex_url,
+        id=company_id,
+        name=name,
+        category=categories,
+        address=address,
+        phones=phones,
+        website=website,
+        rating=_rating(source),
+        yandex_url=yandex_url,
     )
 
 
@@ -152,7 +176,9 @@ def organizations_from_payloads(
         for node in walk_json(payload):
             organization = organization_from_node(node)
             if not organization or not address_matches(
-                organization.address, house_address, allow_missing_candidate=allow_missing_address
+                organization.address,
+                house_address,
+                allow_missing_candidate=allow_missing_address,
             ):
                 continue
             key = organization.id or f"{normalize_address(organization.name)}|{normalize_address(organization.address)}"
@@ -197,7 +223,12 @@ def organization_from_dom(
             address = line
         elif category is None and len(line) < 120:
             category = line
+    company_id = match.group(1)
     return Organization(
-        id=match.group(1), name=name, category=category, address=address, rating=rating,
+        id=company_id,
+        name=name,
+        category=category,
+        address=address,
+        rating=rating,
         yandex_url=urljoin("https://yandex.ru", href),
     )
