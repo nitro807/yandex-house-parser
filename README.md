@@ -10,7 +10,7 @@
 docker compose up --build -d
 ```
 
-Откройте `http://localhost:3000`. Для остановки: `docker compose down`.
+Откройте `http://localhost:18473`. Для остановки: `docker compose down`.
 
 ## Разработка без Docker
 
