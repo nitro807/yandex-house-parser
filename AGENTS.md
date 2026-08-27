@@ -14,3 +14,10 @@
   the table beyond its card.
 - Overrode the shared table cells' `whitespace-nowrap` rule for result content and
   enabled `overflow-wrap: anywhere` for concatenated parser text.
+
+## Latest parser update
+
+- Require an organization's address to match the recognized house when that
+  house address is known; addressless businesses from map payloads are excluded.
+- Limit the DOM fallback to organization result cards so nearby map labels are
+  not reported as businesses inside the requested building.
