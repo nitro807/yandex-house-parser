@@ -54,7 +54,7 @@ class YandexHouseParser:
             await self._playwright.stop()
             self._playwright = None
 
-    async def parse(self, source_url: str, max_organizations: int = 100) -> ParseResult:
+    async def parse(self, source_url: str) -> ParseResult:
         validate_yandex_url(source_url)
         async with self._lock:
             await self.start()
@@ -69,11 +69,11 @@ class YandexHouseParser:
                 ),
             )
             try:
-                return await self._parse_in_context(context, source_url, max_organizations)
+                return await self._parse_in_context(context, source_url)
             finally:
                 await context.close()
 
-    async def _parse_in_context(self, context: BrowserContext, source_url: str, max_items: int) -> ParseResult:
+    async def _parse_in_context(self, context: BrowserContext, source_url: str) -> ParseResult:
         page = await context.new_page()
         payloads: list[object] = []
         warnings: list[str] = []
@@ -116,31 +116,17 @@ class YandexHouseParser:
                 raise ParserError("Ссылка ведёт на организацию, но адрес дома в карточке не найден")
 
         address = probable_house_address(await self._address_candidates(page))
-        payload_count_before_section = len(payloads)
         section_opened = await self._open_organizations(page)
         if not section_opened:
             warnings.append("Не удалось открыть раздел «Организации внутри»")
 
-        await self._scroll_results(page, max_items)
-        await page.wait_for_timeout(1_000)
-        if await self._captcha_visible(page):
-            raise ParserError("Во время сбора Яндекс показал капчу")
-
         organizations: list[Organization] = []
+        organization_pages = 0
         if section_opened:
-            # The links rendered in `/inside/` are the allow-list. Network
-            # payloads also contain unrelated map recommendations, so never
-            # return a business whose id is absent from the inside list.
-            dom_organizations = await self._organizations_from_dom(page, address)
-            allowed_ids = {item.id for item in dom_organizations if item.id}
-            payload_organizations = organizations_from_payloads(
-                payloads[payload_count_before_section:],
-                address,
-                allow_missing_address=True,
+            organizations, organization_pages, fully_enriched = await self._collect_organization_pages(
+                page, address, payloads
             )
-            enriched = {item.id: item for item in payload_organizations if item.id in allowed_ids}
-            organizations = [enriched.get(item.id, item) for item in dom_organizations]
-            if organizations and len(enriched) < len(organizations):
+            if organizations and not fully_enriched:
                 warnings.append("Часть организаций извлечена из страницы; телефоны и сайты могут отсутствовать")
 
         if not address:
@@ -148,7 +134,6 @@ class YandexHouseParser:
             if not address:
                 warnings.append("Адрес дома не распознан; проверь результаты вручную")
 
-        organizations = organizations[:max_items]
         if not organizations:
             warnings.append("Организации не найдены. Возможно, в карточке дома их нет или Яндекс изменил интерфейс")
 
@@ -161,6 +146,7 @@ class YandexHouseParser:
             diagnostics={
                 "captured_payloads": len(payloads),
                 "organization_section_opened": section_opened,
+                "organization_pages": organization_pages,
             },
         )
 
@@ -212,14 +198,14 @@ class YandexHouseParser:
             return False
 
     @staticmethod
-    async def _scroll_results(page: Page, max_items: int) -> None:
+    async def _scroll_results(page: Page) -> None:
         previous = 0
         stable = 0
-        for _ in range(min(40, max(8, max_items // 3))):
+        for _ in range(60):
             count = await page.locator("li a[href*='/org/']").count()
             stable = stable + 1 if count == previous else 0
             previous = count
-            if count >= max_items or stable >= 3:
+            if stable >= 4:
                 break
             await page.evaluate(
                 """() => {
@@ -231,6 +217,71 @@ class YandexHouseParser:
                 }"""
             )
             await page.wait_for_timeout(500)
+
+    async def _collect_organization_pages(
+        self,
+        page: Page,
+        house_address: str | None,
+        payloads: list[object],
+    ) -> tuple[list[Organization], int, bool]:
+        pending = [page.url]
+        queued = {self._inside_page_number(page.url)}
+        visited: set[int] = set()
+        found: dict[str, Organization] = {}
+        fully_enriched = True
+
+        while pending:
+            target = pending.pop(0)
+            page_number = self._inside_page_number(target)
+            if page_number in visited:
+                continue
+            visited.add(page_number)
+
+            if self._inside_page_number(page.url) != page_number:
+                await page.goto(target, wait_until="domcontentloaded", timeout=30_000)
+                await page.wait_for_timeout(1_000)
+
+            await self._scroll_results(page)
+            await page.wait_for_timeout(500)
+            if await self._captcha_visible(page):
+                raise ParserError("Во время сбора Яндекс показал капчу")
+
+            dom_organizations = await self._organizations_from_dom(page, house_address)
+            allowed_ids = {item.id for item in dom_organizations if item.id}
+            payload_organizations = organizations_from_payloads(
+                payloads,
+                house_address,
+                allow_missing_address=True,
+            )
+            enriched = {item.id: item for item in payload_organizations if item.id in allowed_ids}
+            fully_enriched = fully_enriched and len(enriched) >= len(dom_organizations)
+
+            for item in dom_organizations:
+                organization = enriched.get(item.id, item)
+                key = organization.id or organization.yandex_url or organization.name
+                found.setdefault(key, organization)
+
+            hrefs = await page.locator("a[href*='/inside/'][href*='page=']").evaluate_all(
+                "(links) => links.map((link) => link.getAttribute('href')).filter(Boolean)"
+            )
+            for href in hrefs:
+                target_url = urljoin(page.url, href)
+                target_number = self._inside_page_number(target_url)
+                if target_number not in visited and target_number not in queued:
+                    queued.add(target_number)
+                    pending.append(target_url)
+
+        return list(found.values()), len(visited), fully_enriched
+
+    @staticmethod
+    def _inside_page_number(url: str) -> int:
+        from urllib.parse import parse_qs
+
+        value = parse_qs(urlparse(url).query).get("page", ["1"])[0]
+        try:
+            return max(1, int(value))
+        except (TypeError, ValueError):
+            return 1
 
     @staticmethod
     async def _organizations_from_dom(page: Page, house_address: str | None) -> list[Organization]:
