@@ -89,6 +89,17 @@ class ExtractTests(unittest.TestCase):
         self.assertEqual(result.category, "Пункт выдачи")
         self.assertEqual(result.address, "Шебашёвский пр., 7")
 
+    def test_opening_hours_are_not_mistaken_for_address(self):
+        result = organization_from_dom(
+            "Ozon",
+            "/maps/org/ozon/11633193053/",
+            "Ozon\nФото\nОткрыто до 22:00\nПункт выдачи",
+            category="Пункт выдачи",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertIsNone(result.address)
+
 
 if __name__ == "__main__":
     unittest.main()
