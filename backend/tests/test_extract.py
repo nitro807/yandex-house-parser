@@ -23,6 +23,62 @@ class ExtractTests(unittest.TestCase):
         self.assertTrue(address_matches("г. Москва, ул. Тверская, дом 1", "Москва, Тверская улица, 1"))
         self.assertFalse(address_matches("Москва, Тверская улица, 10", "Москва, Тверская улица, 1"))
 
+    def test_known_house_rejects_business_without_address(self):
+        self.assertFalse(address_matches(None, "Москва, Тверская улица, 1"))
+
+    def test_trusted_house_section_accepts_business_without_address(self):
+        self.assertTrue(
+            address_matches(
+                None,
+                "Москва, Тверская улица, 1",
+                allow_missing_candidate=True,
+            )
+        )
+
+    def test_payload_rejects_nearby_and_addressless_businesses(self):
+        payload = {
+            "items": [
+                {
+                    "type": "business",
+                    "id": "1",
+                    "title": "В доме",
+                    "address": "Москва, Тверская улица, 1",
+                },
+                {
+                    "type": "business",
+                    "id": "2",
+                    "title": "Рядом",
+                    "address": "Москва, Тверская улица, 10",
+                },
+                {"type": "business", "id": "3", "title": "Метка на карте"},
+            ]
+        }
+
+        result = organizations_from_payloads([payload], "Москва, Тверская улица, 1")
+
+        self.assertEqual([organization.id for organization in result], ["1"])
+
+    def test_house_section_keeps_addressless_but_rejects_other_address(self):
+        payload = {
+            "items": [
+                {"type": "business", "id": "1", "title": "Ozon"},
+                {
+                    "type": "business",
+                    "id": "2",
+                    "title": "Рядом",
+                    "address": "Москва, Тверская улица, 10",
+                },
+            ]
+        }
+
+        result = organizations_from_payloads(
+            [payload],
+            "Москва, Тверская улица, 1",
+            allow_missing_address=True,
+        )
+
+        self.assertEqual([organization.id for organization in result], ["1"])
+
 
 if __name__ == "__main__":
     unittest.main()

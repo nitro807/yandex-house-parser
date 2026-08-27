@@ -14,3 +14,12 @@
   the table beyond its card.
 - Overrode the shared table cells' `whitespace-nowrap` rule for result content and
   enabled `overflow-wrap: anywhere` for concatenated parser text.
+
+## Latest parser update
+
+- Prefer network responses triggered by opening the building's organization tab,
+  excluding unrelated businesses loaded earlier for the surrounding map.
+- Keep addressless organizations when they come from that trusted building list,
+  while still rejecting entries that explicitly contain a different address.
+- Limit the DOM fallback to organization result cards; these cards may omit an
+  address because their membership in the building list provides the context.

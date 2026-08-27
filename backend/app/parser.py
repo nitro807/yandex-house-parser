@@ -112,6 +112,7 @@ class YandexHouseParser:
         address_candidates = await self._address_candidates(page)
         address = probable_house_address(address_candidates)
 
+        payload_count_before_section = len(payloads)
         clicked = await self._open_organizations(page)
         if not clicked:
             warnings.append("Не удалось явно открыть раздел организаций; использованы данные карточки дома")
@@ -121,7 +122,18 @@ class YandexHouseParser:
         if await self._captcha_visible(page):
             raise ParserError("Во время сбора Яндекс показал капчу")
 
-        organizations = organizations_from_payloads(payloads, address)
+        # Responses loaded before the click also contain businesses from the map
+        # viewport. Responses triggered by the organizations tab represent the
+        # building list and may legitimately omit an address (as Yandex does for
+        # compact cards such as pickup points).
+        section_payloads = payloads[payload_count_before_section:] if clicked else []
+        organizations = organizations_from_payloads(
+            section_payloads,
+            address,
+            allow_missing_address=True,
+        )
+        if not organizations and not clicked:
+            organizations = organizations_from_payloads(payloads, address)
         if not organizations:
             organizations = await self._organizations_from_dom(page, address)
             if organizations:
@@ -131,11 +143,6 @@ class YandexHouseParser:
             address = probable_house_address([item.address for item in organizations])
             if not address:
                 warnings.append("Адрес дома не распознан; проверь результаты вручную")
-
-        if address:
-            exact = [item for item in organizations if not item.address or self._address_is_close(item.address, address)]
-            if exact:
-                organizations = exact
 
         organizations = organizations[:max_items]
         if not organizations:
@@ -211,7 +218,14 @@ class YandexHouseParser:
 
     @staticmethod
     async def _organizations_from_dom(page: Page, house_address: str | None) -> list[Organization]:
-        raw = await page.locator("a[href*='/maps/org/'], a[href*='/org/']").evaluate_all(
+        # Map labels also link to businesses, so only inspect links inside result
+        # cards. A page-wide selector mixes nearby companies into the house list.
+        raw = await page.locator(
+            "li a[href*='/maps/org/'], li a[href*='/org/'], "
+            "article a[href*='/maps/org/'], article a[href*='/org/'], "
+            "[class*='search-snippet'] a[href*='/org/'], "
+            "[class*='business-snippet'] a[href*='/org/']"
+        ).evaluate_all(
             """(links) => links.map((link) => {
               const card = link.closest('li, article, [class*=search-snippet], [class*=business-snippet]') || link.parentElement;
               return {name: link.textContent || '', href: link.getAttribute('href') || '', text: card?.innerText || ''};
@@ -221,7 +235,11 @@ class YandexHouseParser:
         seen: set[str] = set()
         for item in raw:
             organization = organization_from_dom(item["name"], item["href"], item["text"])
-            if not organization:
+            if not organization or not YandexHouseParser._address_is_close(
+                organization.address,
+                house_address,
+                allow_missing_candidate=True,
+            ):
                 continue
             key = organization.id or organization.yandex_url or organization.name
             if key in seen:
@@ -231,7 +249,16 @@ class YandexHouseParser:
         return result
 
     @staticmethod
-    def _address_is_close(candidate: str, house: str) -> bool:
+    def _address_is_close(
+        candidate: str | None,
+        house: str | None,
+        *,
+        allow_missing_candidate: bool = False,
+    ) -> bool:
         from .extract import address_matches
 
-        return address_matches(candidate, house)
+        return address_matches(
+            candidate,
+            house,
+            allow_missing_candidate=allow_missing_candidate,
+        )
