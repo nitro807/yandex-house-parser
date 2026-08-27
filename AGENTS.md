@@ -12,3 +12,5 @@
 - Improved semantic text contrast for the results and warning states.
 - Constrained result columns and enabled wrapping so parsed content cannot expand
   the table beyond its card.
+- Overrode the shared table cells' `whitespace-nowrap` rule for result content and
+  enabled `overflow-wrap: anywhere` for concatenated parser text.
