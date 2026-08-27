@@ -2,13 +2,21 @@ import unittest
 
 from app.extract import (
     address_matches,
+    inside_url_for_house,
     organization_from_dom,
     organization_from_node,
     organizations_from_payloads,
 )
 
-
 class ExtractTests(unittest.TestCase):
+    def test_builds_inside_url_only_for_house_page(self):
+        house = "https://yandex.com/maps/213/moscow/house/example/abc==/?ll=1%2C2#map"
+        self.assertEqual(
+            inside_url_for_house(house),
+            "https://yandex.com/maps/213/moscow/house/example/abc==/inside/?ll=1%2C2",
+        )
+        self.assertIsNone(inside_url_for_house("https://yandex.com/maps/org/ozon/11633193053/"))
+
     def test_extracts_current_yandex_business_shape(self):
         payload = {"data": {"items": [{"type": "business", "id": "123", "title": "Кофейня", "address": "Москва, Тверская улица, 1", "categories": [{"name": "Кофейня"}], "phones": [{"value": "+7 999 123-45-67"}], "ratingData": {"ratingValue": 4.8}}]}}
         result = organizations_from_payloads([payload], "Москва, ул. Тверская, д. 1")
@@ -54,9 +62,7 @@ class ExtractTests(unittest.TestCase):
             ]
         }
         result = organizations_from_payloads(
-            [payload],
-            "Москва, Тверская улица, 1",
-            allow_missing_address=True,
+            [payload], "Москва, Тверская улица, 1", allow_missing_address=True
         )
         self.assertEqual([organization.id for organization in result], ["1"])
 
