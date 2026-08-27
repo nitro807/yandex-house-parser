@@ -30,13 +30,18 @@ def normalize_address(value: str | None) -> str:
     return SPACE_RE.sub(" ", value).strip()
 
 
-def address_matches(candidate: str | None, house: str | None) -> bool:
+def address_matches(
+    candidate: str | None,
+    house: str | None,
+    *,
+    allow_missing_candidate: bool = False,
+) -> bool:
     left = normalize_address(candidate)
     right = normalize_address(house)
     if not right:
         return True
     if not left:
-        return False
+        return allow_missing_candidate
     left_numbers = re.findall(r"\b\d+[a-zа-я]?(?:[/кстр.-]\d+[a-zа-я]?)?\b", left)
     right_numbers = re.findall(r"\b\d+[a-zа-я]?(?:[/кстр.-]\d+[a-zа-я]?)?\b", right)
     if left_numbers and right_numbers and left_numbers[-1] != right_numbers[-1]:
@@ -149,13 +154,22 @@ def organization_from_node(node: dict[str, Any]) -> Organization | None:
     )
 
 
-def organizations_from_payloads(payloads: Iterable[Any], house_address: str | None = None) -> list[Organization]:
+def organizations_from_payloads(
+    payloads: Iterable[Any],
+    house_address: str | None = None,
+    *,
+    allow_missing_address: bool = False,
+) -> list[Organization]:
     found: list[Organization] = []
     seen: set[str] = set()
     for payload in payloads:
         for node in walk_json(payload):
             organization = organization_from_node(node)
-            if not organization or not address_matches(organization.address, house_address):
+            if not organization or not address_matches(
+                organization.address,
+                house_address,
+                allow_missing_candidate=allow_missing_address,
+            ):
                 continue
             key = organization.id or f"{normalize_address(organization.name)}|{normalize_address(organization.address)}"
             if key in seen:

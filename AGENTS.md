@@ -17,7 +17,9 @@
 
 ## Latest parser update
 
-- Require an organization's address to match the recognized house when that
-  house address is known; addressless businesses from map payloads are excluded.
-- Limit the DOM fallback to organization result cards so nearby map labels are
-  not reported as businesses inside the requested building.
+- Prefer network responses triggered by opening the building's organization tab,
+  excluding unrelated businesses loaded earlier for the surrounding map.
+- Keep addressless organizations when they come from that trusted building list,
+  while still rejecting entries that explicitly contain a different address.
+- Limit the DOM fallback to organization result cards; these cards may omit an
+  address because their membership in the building list provides the context.
