@@ -9,8 +9,14 @@ from .models import Organization
 
 
 SPACE_RE = re.compile(r"\s+")
-HOUSE_RE = re.compile(r"(?:^|[\s,])(?:д(?:ом)?\.?\s*)?(\d+[а-яa-z]?(?:[/кстр.-]\d+[а-яa-z]?)*)", re.I)
 ORG_PATH_RE = re.compile(r"/(?:maps/)?org/(?:[^/]+/)?(\d+)/?")
+ADDRESS_HINT_RE = re.compile(
+    r"\b(?:улиц(?:а|ы|е|у)|ул\.?|проспект|пр-т|проезд|переулок|пер\.?|"
+    r"шоссе|набережная|наб\.?|площадь|пл\.?|street|st\.?|avenue|ave\.?|"
+    r"drive|road|rd\.?|boulevard|blvd\.?)\b",
+    re.I,
+)
+TIME_RE = re.compile(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b")
 
 
 def inside_url_for_house(url: str) -> str | None:
@@ -219,7 +225,12 @@ def organization_from_dom(
     for line in lines:
         if rating is None and re.fullmatch(r"[0-5](?:[.,]\d)?", line):
             rating = float(line.replace(",", "."))
-        elif address is None and any(char.isdigit() for char in line) and ("," in line or HOUSE_RE.search(line)):
+        elif (
+            address is None
+            and any(char.isdigit() for char in line)
+            and not TIME_RE.search(line)
+            and ("," in line or ADDRESS_HINT_RE.search(line))
+        ):
             address = line
         elif category is None and len(line) < 120:
             category = line
