@@ -7,7 +7,7 @@ from urllib.parse import urljoin, urlparse
 
 from playwright.async_api import Browser, BrowserContext, Page, Playwright, async_playwright
 
-from .extract import address_matches, organization_from_dom, organizations_from_payloads, probable_house_address
+from .extract import inside_url_for_house, organization_from_dom, organizations_from_payloads, probable_house_address
 from .models import Organization, ParseResult
 
 
@@ -109,6 +109,12 @@ class YandexHouseParser:
         if await self._captcha_visible(page):
             raise ParserError("Яндекс показал капчу. Повтори запрос позже или запусти сервис с обычного IP")
 
+        # A shared short link may point to an organization card rather than a
+        # house card. Follow the address link to the containing house first.
+        if "/org/" in urlparse(page.url).path:
+            if not await self._open_house_from_organization(page):
+                raise ParserError("Ссылка ведёт на организацию, но адрес дома в карточке не найден")
+
         address = probable_house_address(await self._address_candidates(page))
         payload_count_before_section = len(payloads)
         section_opened = await self._open_organizations(page)
@@ -120,18 +126,22 @@ class YandexHouseParser:
         if await self._captcha_visible(page):
             raise ParserError("Во время сбора Яндекс показал капчу")
 
-        section_payloads = payloads[payload_count_before_section:] if section_opened else []
-        organizations = organizations_from_payloads(
-            section_payloads,
-            address,
-            allow_missing_address=True,
-        )
-        if not organizations and not section_opened:
-            organizations = organizations_from_payloads(payloads, address)
-        if not organizations and section_opened:
-            organizations = await self._organizations_from_dom(page, address)
-            if organizations:
-                warnings.append("Организации извлечены из страницы; телефоны и сайты могут отсутствовать")
+        organizations: list[Organization] = []
+        if section_opened:
+            # The links rendered in `/inside/` are the allow-list. Network
+            # payloads also contain unrelated map recommendations, so never
+            # return a business whose id is absent from the inside list.
+            dom_organizations = await self._organizations_from_dom(page, address)
+            allowed_ids = {item.id for item in dom_organizations if item.id}
+            payload_organizations = organizations_from_payloads(
+                payloads[payload_count_before_section:],
+                address,
+                allow_missing_address=True,
+            )
+            enriched = {item.id: item for item in payload_organizations if item.id in allowed_ids}
+            organizations = [enriched.get(item.id, item) for item in dom_organizations]
+            if organizations and len(enriched) < len(organizations):
+                warnings.append("Часть организаций извлечена из страницы; телефоны и сайты могут отсутствовать")
 
         if not address:
             address = probable_house_address([item.address for item in organizations])
@@ -174,14 +184,30 @@ class YandexHouseParser:
     async def _open_organizations(page: Page) -> bool:
         if "/inside/" in urlparse(page.url).path:
             return True
-        locator = page.locator("a[href*='/inside/']").first
         try:
-            href = await locator.get_attribute("href", timeout=3_000)
+            target = inside_url_for_house(page.url)
+            if not target:
+                locator = page.locator("a[href*='/inside/']").first
+                href = await locator.get_attribute("href", timeout=3_000)
+                if not href:
+                    return False
+                target = urljoin(page.url, href)
+            await page.goto(target, wait_until="domcontentloaded", timeout=30_000)
+            await page.wait_for_timeout(1_000)
+            return "/inside/" in urlparse(page.url).path
+        except Exception:
+            return False
+
+    @staticmethod
+    async def _open_house_from_organization(page: Page) -> bool:
+        try:
+            locator = page.locator("a[href*='/house/']").first
+            href = await locator.get_attribute("href", timeout=5_000)
             if not href:
                 return False
             await page.goto(urljoin(page.url, href), wait_until="domcontentloaded", timeout=30_000)
             await page.wait_for_timeout(1_000)
-            return "/inside/" in urlparse(page.url).path
+            return "/house/" in urlparse(page.url).path
         except Exception:
             return False
 
@@ -226,10 +252,8 @@ class YandexHouseParser:
                 item["name"], item["href"], item["text"],
                 category=item.get("category"), address=item.get("address"),
             )
-            if not organization or not address_matches(
-                organization.address,
-                house_address,
-                allow_missing_candidate=True,
+            if not organization or not self_address_matches(
+                organization.address, house_address, allow_missing_candidate=True
             ):
                 continue
             key = organization.id or organization.yandex_url or organization.name
@@ -238,3 +262,9 @@ class YandexHouseParser:
             seen.add(key)
             result.append(organization)
         return result
+
+
+def self_address_matches(candidate: str | None, house: str | None, *, allow_missing_candidate: bool = False) -> bool:
+    from .extract import address_matches
+
+    return address_matches(candidate, house, allow_missing_candidate=allow_missing_candidate)
