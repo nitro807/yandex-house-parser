@@ -100,6 +100,19 @@ class ExtractTests(unittest.TestCase):
         assert result is not None
         self.assertIsNone(result.address)
 
+    def test_floor_and_office_are_not_mistaken_for_house_address(self):
+        result = organization_from_dom(
+            "Алина Айз",
+            "/maps/org/alina_ayz/237258866285/",
+            "Алина Айз\nОткрыто до 21:00\nСалон бровей и ресниц\n"
+            "Вход со стороны улицы, этаж цокольный, кабинет 8",
+            category="Салон бровей и ресниц",
+        )
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertEqual(result.name, "Алина Айз")
+        self.assertIsNone(result.address)
+
 
 if __name__ == "__main__":
     unittest.main()
