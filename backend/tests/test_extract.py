@@ -18,12 +18,14 @@ class ExtractTests(unittest.TestCase):
         self.assertIsNone(inside_url_for_house("https://yandex.com/maps/org/ozon/11633193053/"))
 
     def test_extracts_current_yandex_business_shape(self):
-        payload = {"data": {"items": [{"type": "business", "id": "123", "title": "Кофейня", "address": "Москва, Тверская улица, 1", "categories": [{"name": "Кофейня"}], "phones": [{"value": "+7 999 123-45-67"}], "ratingData": {"ratingValue": 4.8}}]}}
+        payload = {"data": {"items": [{"type": "business", "id": "123", "title": "Кофейня", "address": "Москва, Тверская улица, 1", "categories": [{"name": "Кофейня"}], "phones": [{"value": "+7 999 123-45-67"}], "email": "hello@example.ru", "businessLinks": [{"type": "website", "link": "https://example.ru"}], "ratingData": {"ratingValue": 4.8}}]}}
         result = organizations_from_payloads([payload], "Москва, ул. Тверская, д. 1")
         self.assertEqual(len(result), 1)
         self.assertEqual(result[0].id, "123")
         self.assertEqual(result[0].rating, 4.8)
         self.assertEqual(result[0].phones, ["+7 999 123-45-67"])
+        self.assertEqual(result[0].email, "hello@example.ru")
+        self.assertEqual(result[0].website, "https://example.ru")
 
     def test_extracts_official_geojson_shape(self):
         node = {"type": "Feature", "properties": {"uri": "ymapsbm1://org?oid=987", "CompanyMetaData": {"id": "987", "name": "Аптека", "address": "Москва, Арбат, 10", "Categories": [{"name": "Аптека"}], "Phones": [{"formatted": "+7 495 000-00-00"}]}}}
