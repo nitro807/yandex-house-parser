@@ -83,3 +83,31 @@ test("renders sidebar skeletons deterministically", async () => {
   assert.equal(first, second);
   assert.match(first, /--skeleton-width:70%/);
 });
+
+test("keeps long parser output inside fixed result columns", async () => {
+  const { Results } = await vite.ssrLoadModule("/app/parser-app.tsx");
+  const unbrokenText = "ОченьДлинноеЗначениеБезПробелов".repeat(8);
+  const html = renderToStaticMarkup(
+    React.createElement(Results, {
+      result: {
+        source_url: "https://yandex.ru/maps/",
+        resolved_url: "https://yandex.ru/maps/1/",
+        organizations: [
+          {
+            name: unbrokenText,
+            category: unbrokenText,
+            address: unbrokenText,
+            phones: [unbrokenText],
+          },
+        ],
+        warnings: [],
+      },
+      onDownload() {},
+    }),
+  );
+
+  assert.match(html, /table-fixed/);
+  assert.match(html, /whitespace-normal/);
+  assert.match(html, /overflow-wrap:anywhere/);
+  assert.match(html, new RegExp(unbrokenText));
+});

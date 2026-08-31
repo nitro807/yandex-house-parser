@@ -9,11 +9,11 @@
 
 ## Latest UI update
 
-- Improved semantic text contrast for the results and warning states.
-- Constrained result columns and enabled wrapping so parsed content cannot expand
-  the table beyond its card.
-- Overrode the shared table cells' `whitespace-nowrap` rule for result content and
-  enabled `overflow-wrap: anywhere` for concatenated parser text.
+- Switched the results table to a fixed layout with explicit column widths.
+- Overrode the shared table cells' `whitespace-nowrap` rule for result rows and
+  enabled `overflow-wrap: anywhere`, including for parser text without spaces.
+- Added a rendered-component regression test for long organization, category,
+  address, and phone values.
 
 ## Latest parser update
 
