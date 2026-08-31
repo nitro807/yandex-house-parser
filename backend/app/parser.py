@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 from contextlib import suppress
 from urllib.parse import urljoin, urlparse
 
@@ -122,12 +124,20 @@ class YandexHouseParser:
 
         organizations: list[Organization] = []
         organization_pages = 0
+        contact_cards_opened = 0
+        contact_cards_failed = 0
         if section_opened:
-            organizations, organization_pages, fully_enriched = await self._collect_organization_pages(
+            organizations, organization_pages, _ = await self._collect_organization_pages(
                 page, address, payloads
             )
-            if organizations and not fully_enriched:
-                warnings.append("Часть организаций извлечена из страницы; телефоны и сайты могут отсутствовать")
+            organizations, contact_cards_opened, contact_cards_failed = await self._enrich_contacts(
+                context, organizations
+            )
+            if contact_cards_failed:
+                warnings.append(
+                    f"Не удалось открыть карточки {contact_cards_failed} организаций; "
+                    "их контакты могут отсутствовать"
+                )
 
         if not address:
             address = probable_house_address([item.address for item in organizations])
@@ -147,8 +157,125 @@ class YandexHouseParser:
                 "captured_payloads": len(payloads),
                 "organization_section_opened": section_opened,
                 "organization_pages": organization_pages,
+                "contact_cards_opened": contact_cards_opened,
+                "contact_cards_failed": contact_cards_failed,
             },
         )
+
+    async def _enrich_contacts(
+        self,
+        context: BrowserContext,
+        organizations: list[Organization],
+    ) -> tuple[list[Organization], int, int]:
+        if not organizations:
+            return organizations, 0, 0
+
+        try:
+            configured_workers = int(os.getenv("CONTACT_WORKERS", "3"))
+        except ValueError:
+            configured_workers = 3
+        worker_count = min(len(organizations), max(1, configured_workers))
+        queue: asyncio.Queue[tuple[int, Organization]] = asyncio.Queue()
+        for index, organization in enumerate(organizations):
+            queue.put_nowait((index, organization))
+
+        enriched = list(organizations)
+        opened = 0
+        failed = 0
+        counter_lock = asyncio.Lock()
+
+        async def worker() -> None:
+            nonlocal opened, failed
+            detail_page = await context.new_page()
+
+            async def block_heavy_assets(route) -> None:
+                if route.request.resource_type in {"image", "media", "font"}:
+                    await route.abort()
+                else:
+                    await route.continue_()
+
+            with suppress(Exception):
+                await detail_page.route("**/*", block_heavy_assets)
+            try:
+                while not queue.empty():
+                    try:
+                        index, organization = queue.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+                    try:
+                        if not organization.yandex_url:
+                            raise ValueError("У организации нет ссылки на карточку")
+                        parsed = urlparse(organization.yandex_url)
+                        if parsed.scheme != "https" or parsed.hostname not in ALLOWED_HOSTS:
+                            raise ValueError("Некорректная ссылка на карточку")
+                        await detail_page.goto(
+                            organization.yandex_url,
+                            wait_until="domcontentloaded",
+                            timeout=30_000,
+                        )
+                        await detail_page.locator("h1").first.wait_for(state="visible", timeout=8_000)
+                        await detail_page.wait_for_timeout(350)
+                        if await self._captcha_visible(detail_page):
+                            raise RuntimeError("Яндекс показал капчу")
+                        contacts = await self._contacts_from_card(detail_page)
+                        enriched[index] = organization.model_copy(
+                            update={
+                                "phones": contacts["phones"] or organization.phones,
+                                "email": contacts["email"] or organization.email,
+                                "website": contacts["website"] or organization.website,
+                            }
+                        )
+                        async with counter_lock:
+                            opened += 1
+                    except Exception:
+                        async with counter_lock:
+                            failed += 1
+                    finally:
+                        queue.task_done()
+            finally:
+                await detail_page.close()
+
+        await asyncio.gather(*(worker() for _ in range(worker_count)))
+        return enriched, opened, failed
+
+    @staticmethod
+    async def _contacts_from_card(page: Page) -> dict[str, object]:
+        raw = await page.evaluate(
+            """() => {
+              const clean = (value) => (value || '').replace(/\\s+/g, ' ').trim();
+              const unique = (values) => [...new Set(values.map(clean).filter(Boolean))];
+              const phones = unique([
+                ...[...document.querySelectorAll("[itemprop='telephone']")].map((node) => node.textContent),
+                ...[...document.querySelectorAll("a[href^='tel:']")].map((node) =>
+                  decodeURIComponent((node.getAttribute('href') || '').slice(4))
+                ),
+              ]);
+              const websiteNode = document.querySelector("a[itemprop='url'][href]");
+              const contactText = [...document.querySelectorAll('.business-contacts-view__block')]
+                .map((node) => node.innerText || '').join(' ');
+              const mailto = document.querySelector("a[href^='mailto:']");
+              const emailNode = document.querySelector("[itemprop='email']");
+              const emailMatch = contactText.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/i);
+              return {
+                phones,
+                website: websiteNode?.href || null,
+                email: mailto
+                  ? decodeURIComponent((mailto.getAttribute('href') || '').slice(7).split('?')[0])
+                  : clean(emailNode?.getAttribute('content') || emailNode?.textContent) || emailMatch?.[0] || null,
+              };
+            }"""
+        )
+        phones = [
+            value for value in raw.get("phones", [])
+            if isinstance(value, str) and re.search(r"\d", value)
+        ]
+        email = raw.get("email")
+        if not isinstance(email, str) or not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            email = None
+        website = raw.get("website")
+        if not isinstance(website, str) or not website.startswith(("http://", "https://")):
+            website = None
+        return {"phones": phones, "email": email, "website": website}
 
     @staticmethod
     async def _captcha_visible(page: Page) -> bool:
