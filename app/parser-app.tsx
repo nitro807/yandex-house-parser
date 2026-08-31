@@ -9,7 +9,7 @@ import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 
-type Organization = { id?: string | null; name: string; category?: string | null; address?: string | null; phones: string[]; website?: string | null; rating?: number | null; yandex_url?: string | null };
+type Organization = { id?: string | null; name: string; category?: string | null; address?: string | null; phones: string[]; email?: string | null; website?: string | null; rating?: number | null; yandex_url?: string | null };
 type ParseResult = { source_url: string; resolved_url: string; address?: string | null; organizations: Organization[]; warnings: string[] };
 
 const csvCell = (value: string | number | null | undefined) => `"${String(value ?? "").replaceAll('"', '""')}"`;
@@ -38,8 +38,8 @@ export function ParserApp() {
 
   const csv = useMemo(() => {
     if (!result) return "";
-    const rows = result.organizations.map((item) => [item.name, item.category, item.address, item.phones.join(", "), item.website, item.rating, item.yandex_url].map(csvCell).join(";"));
-    return [["Название", "Категория", "Адрес", "Телефоны", "Сайт", "Рейтинг", "Яндекс Карты"].map(csvCell).join(";"), ...rows].join("\n");
+    const rows = result.organizations.map((item) => [item.name, item.category, item.address, item.phones.join(", "), item.email, item.website, item.rating, item.yandex_url].map(csvCell).join(";"));
+    return [["Название", "Категория", "Адрес", "Телефоны", "Email", "Сайт", "Рейтинг", "Яндекс Карты"].map(csvCell).join(";"), ...rows].join("\n");
   }, [result]);
 
   function downloadCsv() {
@@ -64,7 +64,7 @@ export function ParserApp() {
               <div className="relative"><Link2 className="absolute left-4 top-1/2 size-4 -translate-y-1/2 text-white/35" /><Input id="yandex-url" type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://yandex.ru/maps/..." autoComplete="off" className="h-14 rounded-2xl border-white/10 bg-white/8 pl-11 text-white placeholder:text-white/25 focus-visible:border-[#f5b44a] focus-visible:ring-[#f5b44a]/30" /></div>
               <Button type="submit" disabled={!canSubmit || loading} className="h-14 w-full rounded-2xl bg-[#f5b44a] text-[#17211f] hover:bg-[#ffc466]"><Search className="size-4" />{loading ? "Собираю организации…" : "Найти организации"}</Button>
             </form>
-            <div className="mt-auto border-t border-white/10 pt-6 text-xs leading-5 text-white/40">Первый запрос может занять до минуты: сервис запускает браузер и прокручивает список организаций.</div>
+            <div className="mt-auto border-t border-white/10 pt-6 text-xs leading-5 text-white/40">Сервис собирает список, затем открывает карточку каждой организации, чтобы найти опубликованные контакты. Для большого здания это может занять несколько минут.</div>
           </aside>
           <section className="min-w-0 rounded-[28px] border border-[#17211f]/10 bg-[#fbfaf6] p-5 sm:p-8">
             {!loading && !result && !error && <EmptyState />}
@@ -83,7 +83,7 @@ function Results({ result, onDownload }: { result: ParseResult; onDownload: () =
     <div className="flex flex-col gap-4 border-b border-[#17211f]/10 pb-6 sm:flex-row sm:items-end sm:justify-between"><div><p className="mb-2 text-xs font-medium uppercase tracking-[0.16em] text-[#73807d]">Найдено</p><div className="flex items-baseline gap-3"><strong className="text-5xl font-semibold tracking-[-0.05em]">{result.organizations.length}</strong><span className="text-sm text-[#66736f]">организаций</span></div>{result.address && <p className="mt-3 text-sm text-[#3d4b47]">{result.address}</p>}</div><Button variant="outline" onClick={onDownload} disabled={!result.organizations.length} className="rounded-xl bg-white"><Download className="size-4" /> Скачать CSV</Button></div>
     {result.warnings.length > 0 && <Alert className="rounded-2xl border-[#f5b44a]/50 bg-[#fff8e7]"><TriangleAlert className="size-4 text-[#9b6717]" /><AlertTitle>Обрати внимание</AlertTitle><AlertDescription>{result.warnings.join(" ")}</AlertDescription></Alert>}
     <div className="overflow-hidden rounded-2xl border border-[#17211f]/10 bg-white"><div className="max-h-[calc(100vh-320px)] overflow-auto"><Table><TableHeader className="sticky top-0 z-10 bg-[#f0eee7]"><TableRow><TableHead className="w-12">№</TableHead><TableHead>Организация</TableHead><TableHead>Категория</TableHead><TableHead>Контакты</TableHead><TableHead className="w-20">Карта</TableHead></TableRow></TableHeader><TableBody>
-      {result.organizations.map((item, index) => { const website = websiteUrl(item.website); return <TableRow key={item.id || `${item.name}-${index}`}><TableCell className="align-top text-[#8a9592]">{String(index + 1).padStart(2, "0")}</TableCell><TableCell className="min-w-56 align-top"><p className="font-medium">{item.name}</p>{item.address && <p className="mt-1 max-w-sm text-xs leading-5 text-[#72807c]">{item.address}</p>}{item.rating != null && <Badge className="mt-2 bg-[#e9f5dd] text-[#365b21]">★ {item.rating}</Badge>}</TableCell><TableCell className="max-w-56 align-top text-sm text-[#53615e]">{item.category || "—"}</TableCell><TableCell className="align-top text-sm">{item.phones.map((phone) => <div key={phone}>{phone}</div>)}{website && <a href={website} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-[#c34127] hover:underline">Сайт <ArrowUpRight className="size-3" /></a>}{!item.phones.length && !website && "—"}</TableCell><TableCell className="align-top">{item.yandex_url ? <Button asChild variant="ghost" size="icon" className="rounded-full"><a href={item.yandex_url} target="_blank" rel="noreferrer" aria-label={`Открыть ${item.name} на Яндекс Картах`}><ArrowUpRight className="size-4" /></a></Button> : "—"}</TableCell></TableRow>; })}
+      {result.organizations.map((item, index) => { const website = websiteUrl(item.website); return <TableRow key={item.id || `${item.name}-${index}`}><TableCell className="align-top text-[#8a9592]">{String(index + 1).padStart(2, "0")}</TableCell><TableCell className="min-w-56 align-top"><p className="font-medium">{item.name}</p>{item.address && <p className="mt-1 max-w-sm text-xs leading-5 text-[#72807c]">{item.address}</p>}{item.rating != null && <Badge className="mt-2 bg-[#e9f5dd] text-[#365b21]">★ {item.rating}</Badge>}</TableCell><TableCell className="max-w-56 align-top text-sm text-[#53615e]">{item.category || "—"}</TableCell><TableCell className="min-w-48 align-top text-sm">{item.phones.map((phone) => <a key={phone} href={`tel:${phone}`} className="block hover:underline">{phone}</a>)}{item.email && <a href={`mailto:${item.email}`} className="mt-1 block break-all text-[#c34127] hover:underline">{item.email}</a>}{website && <a href={website} target="_blank" rel="noreferrer" className="mt-1 inline-flex items-center gap-1 text-[#c34127] hover:underline">Сайт <ArrowUpRight className="size-3" /></a>}{!item.phones.length && !item.email && !website && "—"}</TableCell><TableCell className="align-top">{item.yandex_url ? <Button asChild variant="ghost" size="icon" className="rounded-full"><a href={item.yandex_url} target="_blank" rel="noreferrer" aria-label={`Открыть ${item.name} на Яндекс Картах`}><ArrowUpRight className="size-4" /></a></Button> : "—"}</TableCell></TableRow>; })}
     </TableBody></Table></div></div>
   </div>;
 }
