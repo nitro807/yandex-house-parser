@@ -88,6 +88,17 @@ def _phone_values(value: Any) -> list[str]:
     return result
 
 
+def _email_value(value: Any) -> str | None:
+    values = value if isinstance(value, list) else [value]
+    for item in values:
+        if isinstance(item, dict):
+            item = item.get("value") or item.get("email") or item.get("address")
+        email = clean_text(item)
+        if email and re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", email):
+            return email
+    return None
+
+
 def _categories(value: Any) -> str | None:
     if not isinstance(value, list):
         return None
@@ -136,13 +147,17 @@ def organization_from_node(node: dict[str, Any]) -> Organization | None:
     phones = _phone_values(source.get("phones") or source.get("Phones"))
 
     links = source.get("businessLinks") if isinstance(source.get("businessLinks"), list) else []
+    email = _email_value(source.get("email") or source.get("emails") or source.get("Email"))
     website = clean_text(source.get("url") or source.get("website"))
-    if not website:
-        for link in links:
-            if isinstance(link, dict) and str(link.get("type", "")).casefold() in {"website", "site"}:
-                website = clean_text(link.get("link") or link.get("url"))
-                if website:
-                    break
+    for link in links:
+        if not isinstance(link, dict):
+            continue
+        link_type = str(link.get("type", "")).casefold()
+        link_value = clean_text(link.get("link") or link.get("url") or link.get("value"))
+        if not website and link_type in {"website", "site"}:
+            website = link_value
+        elif not email and link_type in {"email", "mail"}:
+            email = _email_value(link_value)
 
     uri = clean_text(source.get("uri") or properties.get("uri"))
     yandex_url = clean_text(source.get("urlForYandexMaps") or source.get("yandexUrl"))
@@ -157,6 +172,7 @@ def organization_from_node(node: dict[str, Any]) -> Organization | None:
         category=categories,
         address=address,
         phones=phones,
+        email=email,
         website=website,
         rating=_rating(source),
         yandex_url=yandex_url,
